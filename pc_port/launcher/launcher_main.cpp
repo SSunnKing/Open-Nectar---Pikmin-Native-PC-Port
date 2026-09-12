@@ -1,4 +1,6 @@
 #include "gamecube_image.h"
+#include "asset_finalize.h"
+#include "prepared_image.h"
 #include "installer_ui.h"
 #include "launcher_platform.h"
 
@@ -213,9 +215,13 @@ bool installAssets(const fs::path& image, const fs::path& dataRoot, std::string&
         fs::remove_all(partialAssets, ec);
         return false;
     }
-    fs::rename(partialAssets, finalAssets, ec);
+    if (progressCallback) progressCallback(100, "Finishing installation...");
+    ec = pikmin::launcher::finalizeAssets(partialAssets, finalAssets);
     if (ec) {
-        failure = "Could not finish the installation: " + ec.message();
+        failure = "Could not finish the installation: " + ec.message()
+                + ". Close programs using the install folder. The extracted files remain at "
+                + partialAssets.string()
+                + ". Choose another install folder, or remove that partial folder before trying again.";
         return false;
     }
     std::cout << "Game data installed in " << finalAssets << "\n";
@@ -492,7 +498,9 @@ void usage(const char* argv0)
               << "With no arguments it opens the graphical installer (needs zenity or kdialog);\n"
               << "from a terminal without those it falls back to the text installer.\n"
               << "The disc image must come from your own copy of Pikmin: USA Rev 1 or Europe.\n"
-              << "--skip-verify skips the image integrity check.\n";
+              << "--skip-verify skips the image integrity check.\n"
+              << "--dolphin-tool PATH enables RVZ/WIA/GCZ conversion (also found beside the launcher or on PATH).\n"
+              << "In game, F1 opens graphics, controls and gameplay settings.\n";
 }
 
 } // namespace
@@ -503,6 +511,7 @@ int main(int argc, char** argv)
     fs::path dataRoot;
     bool extractOnly = false;
     bool skipVerify = false;
+    fs::path converter;
     bool directoryWasSpecified = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -511,6 +520,7 @@ int main(int argc, char** argv)
             dataRoot = argv[++i];
             directoryWasSpecified = true;
         }
+        else if (arg == "--dolphin-tool" && i + 1 < argc) converter = fs::absolute(argv[++i]);
         else if (arg == "--extract-only") extractOnly = true;
         else if (arg == "--skip-verify") skipVerify = true;
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
@@ -527,149 +537,181 @@ int main(int argc, char** argv)
     const bool graphicalInstall = !directoryWasSpecified && !installedBesideLauncher;
     std::unique_ptr<pikmin::launcher::InstallerWindow> installerWindow;
     const auto reportError = [&installerWindow](const std::string& error) {
-        if (installerWindow) installerWindow->showError(error);
-        else std::cerr << "Installation error: " << error << '\n';
+        if (installerWindow) return installerWindow->offerRetry(error);
+        std::cerr << "Installation error: " << error << '\n';
+        return false;
     };
-    if (installedBesideLauncher) {
-        dataRoot = sourceDirectory;
-    } else if (graphicalInstall) {
-        if (hasGraphicalDialogs()) {
-            installerWindow = std::make_unique<pikmin::launcher::InstallerWindow>();
-            std::string error;
-            if (!installerWindow->open(error)) {
-                std::cerr << "Could not open the installer: " << error << '\n';
+    for (;;) {
+        if (installedBesideLauncher) {
+            dataRoot = sourceDirectory;
+        } else if (graphicalInstall) {
+            if (hasGraphicalDialogs()) {
+                if (!installerWindow) {
+                    installerWindow = std::make_unique<pikmin::launcher::InstallerWindow>();
+                    std::string error;
+                    if (!installerWindow->open(error)) {
+                        std::cerr << "Could not open the installer: " << error << '\n';
+                        return 1;
+                    }
+                }
+                std::string selectedRom;
+                std::string selectedInstallDirectory;
+                if (!installerWindow->choosePaths(
+                        [] { return askForImage().string(); },
+                        [] { return askForInstallDirectory().string(); },
+                        selectedRom, selectedInstallDirectory)) {
+                    return 0;
+                }
+                image = selectedRom;
+                dataRoot = selectedInstallDirectory;
+            } else if (stdinIsTerminal()) {
+                image = askForImageConsole();
+                if (image.empty()) {
+                    std::cerr << "No disc image was chosen.\n";
+                    return 1;
+                }
+                dataRoot = askForInstallDirectoryConsole();
+            } else {
+                if (respawnInTerminal()) return 0;
+                std::cerr << "The graphical installer needs Zenity or KDialog.\n"
+                             "Install zenity (Debian/Ubuntu: sudo apt install zenity; Arch: sudo pacman -S zenity)\n"
+                             "or run nectar-launcher from a terminal to use the text installer.\n";
                 return 1;
             }
-            std::string selectedRom;
-            std::string selectedInstallDirectory;
-            if (!installerWindow->choosePaths(
-                    [] { return askForImage().string(); },
-                    [] { return askForInstallDirectory().string(); },
-                    selectedRom, selectedInstallDirectory)) {
-                return 0;
-            }
-            image = selectedRom;
-            dataRoot = selectedInstallDirectory;
-        } else if (stdinIsTerminal()) {
-            image = askForImageConsole();
+        } else if (dataRoot.empty()) {
+            dataRoot = defaultDataRoot();
+        }
+
+        bool installedAssetsNow = false;
+        if (!assetsReady(dataRoot)) {
+            if (image.empty() && hasGraphicalDialogs()) image = askForImage();
+            if (image.empty() && stdinIsTerminal()) image = askForImageConsole();
             if (image.empty()) {
+                if (installerWindow) return 0;
                 std::cerr << "No disc image was chosen.\n";
                 return 1;
             }
-            dataRoot = askForInstallDirectoryConsole();
-        } else {
-            if (respawnInTerminal()) return 0;
-            std::cerr << "The graphical installer needs Zenity or KDialog.\n"
-                         "Install zenity (Debian/Ubuntu: sudo apt install zenity; Arch: sudo pacman -S zenity)\n"
-                         "or run nectar-launcher from a terminal to use the text installer.\n";
-            return 1;
-        }
-    } else if (dataRoot.empty()) {
-        dataRoot = defaultDataRoot();
-    }
-
-    bool installedAssetsNow = false;
-    if (!assetsReady(dataRoot)) {
-        if (image.empty() && hasGraphicalDialogs()) image = askForImage();
-        if (image.empty() && stdinIsTerminal()) image = askForImageConsole();
-        if (image.empty()) {
-            if (installerWindow) return 0;
-            std::cerr << "No disc image was chosen.\n";
-            return 1;
-        }
-        const std::string ext = lowerExtension(image);
-        if (ext != ".iso" && ext != ".gcm") {
-            const std::string error = "The installer takes ISO/GCM. Convert RVZ/WIA/GCZ to ISO with dolphin-tool.";
-            reportError(error);
-            return 1;
-        }
-        // Comprobar la imagen antes de extraer: evita instalar durante minutos
-        // desde una copia dañada y que el fallo aparezca mucho después, ya en
-        // el juego, como un error incomprensible.
-        if (!skipVerify) {
-            if (installerWindow) installerWindow->updateProgress(0, "Checking the image...");
-            else std::cout << "Checking the image..." << std::flush;
-            std::string verifyError;
-            const auto verifyProgress = [&installerWindow](std::uint32_t percent) {
-                if (installerWindow) {
-                    installerWindow->updateProgress(percent, "Checking the image...");
+            pikmin::launcher::PreparedImage prepared;
+            if (pikmin::launcher::isCompressedImage(image)) {
+                if (converter.empty()) converter = platform::findConverter();
+                if (converter.empty() && installerWindow) converter = platform::askForConverter();
+                if (converter.empty()) {
+                    if (reportError("Compressed images need dolphin-tool from a Dolphin installation. "
+                                    "Choose it when prompted, or select an ISO/GCM. For command-line installs, "
+                                    "use --dolphin-tool PATH.")) continue;
+                    return 1;
                 }
-            };
-            if (!pikmin::launcher::verifyImageIntegrity(image, verifyError, verifyProgress)) {
-                if (!installerWindow) std::cout << '\n';
-                reportError(verifyError);
+                const auto pump = [&installerWindow] {
+                    if (installerWindow) installerWindow->updateProgress(101, "Preparing a temporary ISO", "Converting disc");
+                };
+                pump();
+                std::cout << "Converting the disc to a temporary ISO...\n";
+                std::string error;
+                if (!prepared.prepare(fs::absolute(image), [&](const fs::path& source, const fs::path& output, std::string& failure) {
+                        return platform::convertImage(converter, source, output, pump, failure);
+                    }, error)) {
+                    converter.clear();
+                    if (reportError(error)) continue;
+                    return 1;
+                }
+                image = prepared.image;
+            }
+            const std::string ext = lowerExtension(image);
+            if (ext != ".iso" && ext != ".gcm") {
+                const std::string error = "Choose an ISO/GCM, or an RVZ/WIA/GCZ with dolphin-tool available.";
+                if (reportError(error)) continue;
                 return 1;
             }
-            if (!installerWindow) std::cout << " ok.\n";
+            // Comprobar la imagen antes de extraer: evita instalar durante minutos
+            // desde una copia dañada y que el fallo aparezca mucho después, ya en
+            // el juego, como un error incomprensible.
+            if (!skipVerify) {
+                if (installerWindow) installerWindow->updateProgress(0, "", "Checking disc");
+                else std::cout << "Checking the image..." << std::flush;
+                std::string verifyError;
+                const auto verifyProgress = [&installerWindow](std::uint32_t percent) {
+                    if (installerWindow) {
+                        installerWindow->updateProgress(percent, "", "Checking disc");
+                    }
+                };
+                if (!pikmin::launcher::verifyImageIntegrity(image, verifyError, verifyProgress)) {
+                    if (!installerWindow) std::cout << '\n';
+                    if (reportError(verifyError)) continue;
+                    return 1;
+                }
+                if (!installerWindow) std::cout << " ok.\n";
+            }
+
+            std::string failure;
+            const auto progress = [&installerWindow](std::uint32_t percent, const std::string& path) {
+                if (installerWindow) installerWindow->updateProgress(percent, path,
+                    path == "Finishing installation..." ? "Finishing" : "Extracting");
+            };
+            if (!installAssets(image, dataRoot, failure, progress)) {
+                if (reportError(failure)) continue;
+                return 1;
+            }
+            installedAssetsNow = true;
+
+            // Which language to play in. Only the European disc carries more than
+            // one, and all of them are installed either way -- about 6 MB each out
+            // of 648 MB, so leaving some out saves nothing and would mean
+            // reinstalling to change your mind.
+            pikmin::launcher::DiscIdentity identity;
+            std::string ignored;
+            const pikmin::launcher::KnownDisc* disc
+                = pikmin::launcher::inspectGameCubeImage(image, identity, ignored)
+                      ? pikmin::launcher::findKnownDisc(identity)
+                      : nullptr;
+            if (disc != nullptr && disc->languageCount > 1) {
+                std::vector<std::string> names;
+                for (int i = 0; i < disc->languageCount; ++i) {
+                    const LanguageChoice* choice = languageChoice(disc->languages[i]);
+                    names.push_back(choice ? choice->name : disc->languages[i]);
+                }
+
+                int selected = -1;
+                if (stdinIsTerminal()) {
+                    std::cout << "\nThis disc carries " << disc->languageCount << " languages:\n";
+                    for (std::size_t i = 0; i < names.size(); ++i) {
+                        std::cout << "  " << (i + 1) << ") " << names[i] << '\n';
+                    }
+                    const std::string answer = promptLine("Which one do you want to play in? [1]: ");
+                    const int number = answer.empty() ? 1 : std::atoi(answer.c_str());
+                    if (number >= 1 && number <= disc->languageCount) selected = number - 1;
+                } else {
+                    selected = askForLanguage(names);
+                }
+
+                // No way to ask, or nothing chosen: English, and say where to
+                // change it rather than leaving it a mystery.
+                const int language = (selected >= 0) ? selected : 0;
+                if (writeSettingKey(dataRoot, "language", disc->languages[language])) {
+                    std::cout << "Language: " << names[language]
+                              << "  (change it in pikmin_settings.conf, key 'language')\n";
+                }
+            }
         }
 
         std::string failure;
-        const auto progress = [&installerWindow](std::uint32_t percent, const std::string& path) {
-            if (installerWindow) installerWindow->updateProgress(percent, path);
-        };
-        if (!installAssets(image, dataRoot, failure, progress)) {
-            reportError(failure);
+        if (installerWindow) installerWindow->updateProgress(100, "Installing the launcher and game", "Finishing");
+        if (!installExecutables(sourceDirectory, dataRoot, failure)) {
+            if (reportError(failure)) continue;
             return 1;
         }
-        installedAssetsNow = true;
-
-        // Which language to play in. Only the European disc carries more than
-        // one, and all of them are installed either way -- about 6 MB each out
-        // of 648 MB, so leaving some out saves nothing and would mean
-        // reinstalling to change your mind.
-        pikmin::launcher::DiscIdentity identity;
-        std::string ignored;
-        const pikmin::launcher::KnownDisc* disc
-            = pikmin::launcher::inspectGameCubeImage(image, identity, ignored)
-                  ? pikmin::launcher::findKnownDisc(identity)
-                  : nullptr;
-        if (disc != nullptr && disc->languageCount > 1) {
-            std::vector<std::string> names;
-            for (int i = 0; i < disc->languageCount; ++i) {
-                const LanguageChoice* choice = languageChoice(disc->languages[i]);
-                names.push_back(choice ? choice->name : disc->languages[i]);
-            }
-
-            int selected = -1;
-            if (stdinIsTerminal()) {
-                std::cout << "\nThis disc carries " << disc->languageCount << " languages:\n";
-                for (std::size_t i = 0; i < names.size(); ++i) {
-                    std::cout << "  " << (i + 1) << ") " << names[i] << '\n';
-                }
-                const std::string answer = promptLine("Which one do you want to play in? [1]: ");
-                const int number = answer.empty() ? 1 : std::atoi(answer.c_str());
-                if (number >= 1 && number <= disc->languageCount) selected = number - 1;
-            } else {
-                selected = askForLanguage(names);
-            }
-
-            // No way to ask, or nothing chosen: English, and say where to
-            // change it rather than leaving it a mystery.
-            const int language = (selected >= 0) ? selected : 0;
-            if (writeSettingKey(dataRoot, "language", disc->languages[language])) {
-                std::cout << "Language: " << names[language]
-                          << "  (change it in pikmin_settings.conf, key 'language')\n";
-            }
+        if (installedAssetsNow) {
+            if (installerWindow) installerWindow->showComplete(dataRoot.string(), !extractOnly);
+            else std::cout << "Installed in: " << dataRoot << '\n'
+                           << (extractOnly ? "" : "The game will start now.\n");
         }
-    }
+        if (extractOnly) return 0;
 
-    std::string failure;
-    if (!installExecutables(sourceDirectory, dataRoot, failure)) {
-        reportError(failure);
-        return 1;
+        const fs::path gameBinary = dataRoot / kGameExecutable;
+        if (!fs::is_regular_file(gameBinary)) {
+            std::cerr << "The game executable is not next to the launcher: " << gameBinary << '\n';
+            return 1;
+        }
+        installerWindow.reset();
+        launchGame(dataRoot, gameBinary);
     }
-    if (installedAssetsNow) {
-        if (installerWindow) installerWindow->showComplete(dataRoot.string(), !extractOnly);
-        else std::cout << "Installed in: " << dataRoot << '\n'
-                       << (extractOnly ? "" : "The game will start now.\n");
-    }
-    if (extractOnly) return 0;
-
-    const fs::path gameBinary = dataRoot / kGameExecutable;
-    if (!fs::is_regular_file(gameBinary)) {
-        std::cerr << "The game executable is not next to the launcher: " << gameBinary << '\n';
-        return 1;
-    }
-    installerWindow.reset();
-    launchGame(dataRoot, gameBinary);
 }

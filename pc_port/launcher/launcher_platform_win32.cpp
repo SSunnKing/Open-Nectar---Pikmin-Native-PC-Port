@@ -125,7 +125,7 @@ fs::path askForImage()
     OPENFILENAMEW dialog {};
     dialog.lStructSize = sizeof(dialog);
     dialog.hwndOwner   = nullptr;
-    dialog.lpstrFilter = L"GameCube ISO/GCM\0*.iso;*.gcm\0All files\0*.*\0\0";
+    dialog.lpstrFilter = L"GameCube disc image\0*.iso;*.gcm;*.rvz;*.wia;*.gcz\0All files\0*.*\0\0";
     dialog.lpstrFile   = selected.data();
     dialog.nMaxFile    = static_cast<DWORD>(selected.size());
     dialog.lpstrTitle  = L"Open Nectar - Choose your disc image";
@@ -183,6 +183,75 @@ int askForLanguage(const std::vector<std::string>& names)
     // graphical one falls back to the default and says where to change it.
     (void)names;
     return -1;
+}
+
+fs::path findConverter()
+{
+    for (const wchar_t* name : { L"DolphinTool.exe", L"dolphin-tool.exe" }) {
+        const auto beside = executablePath().parent_path() / name;
+        if (fs::is_regular_file(beside)) return beside;
+    }
+    const wchar_t* value = _wgetenv(L"PATH");
+    if (!value) return {};
+    const std::wstring paths(value);
+    std::size_t start = 0;
+    while (start <= paths.size()) {
+        const auto end = paths.find(L';', start);
+        auto directory = paths.substr(start, end - start);
+        if (directory.size() >= 2 && directory.front() == L'"' && directory.back() == L'"')
+            directory = directory.substr(1, directory.size() - 2);
+        if (!directory.empty()) {
+            for (const wchar_t* name : { L"DolphinTool.exe", L"dolphin-tool.exe" }) {
+                const auto candidate = fs::path(directory) / name;
+                if (fs::is_regular_file(candidate)) return fs::absolute(candidate);
+            }
+        }
+        if (end == std::wstring::npos) break;
+        start = end + 1;
+    }
+    return {};
+}
+
+fs::path askForConverter()
+{
+    std::vector<wchar_t> selected(32768);
+    OPENFILENAMEW dialog {};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.lpstrFilter = L"Dolphin converter\0DolphinTool.exe;dolphin-tool.exe\0\0";
+    dialog.lpstrFile = selected.data();
+    dialog.nMaxFile = static_cast<DWORD>(selected.size());
+    dialog.lpstrTitle = L"Choose DolphinTool.exe from your Dolphin installation";
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER;
+    return GetOpenFileNameW(&dialog) ? fs::path(selected.data()) : fs::path();
+}
+
+bool convertImage(const fs::path& converter, const fs::path& source,
+                  const fs::path& destination, const std::function<void()>& pump, std::string& error)
+{
+    // All arguments are file paths (no trailing directory separator); Windows
+    // filenames cannot contain quotes. No shell interprets the command line.
+    std::wstring command = L"\"" + converter.wstring() + L"\" convert -i \""
+                         + source.wstring() + L"\" -o \"" + destination.wstring() + L"\" -f iso";
+    STARTUPINFOW startup {};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process {};
+    if (!CreateProcessW(converter.c_str(), command.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
+        error = "Could not start dolphin-tool (Windows error " + std::to_string(GetLastError())
+              + "). Select DolphinTool.exe from a complete Dolphin installation.";
+        return false;
+    }
+    CloseHandle(process.hThread);
+    while (WaitForSingleObject(process.hProcess, 50) == WAIT_TIMEOUT) {
+        if (pump) pump();
+    }
+    DWORD code = 1;
+    GetExitCodeProcess(process.hProcess, &code);
+    CloseHandle(process.hProcess);
+    if (code == 0) return true;
+    error = "Disc conversion failed (dolphin-tool exit " + std::to_string(code)
+          + "). Check free space in the temporary folder and try your disc image in Dolphin.";
+    return false;
 }
 
 bool respawnInTerminal()

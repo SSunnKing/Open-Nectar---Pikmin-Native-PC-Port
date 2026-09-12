@@ -5,6 +5,7 @@
 #include "launcher_platform.h"
 
 #include <cstdlib>
+#include <cerrno>
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
@@ -158,14 +159,14 @@ fs::path askForImage()
     if (commandExists("zenity")) {
         const std::string selected = runDialog("zenity", {
             "--file-selection", "--title=Open Nectar - Choose your disc image",
-            "--file-filter=GameCube ISO/GCM | *.iso *.ISO *.gcm *.GCM",
+            "--file-filter=GameCube disc image | *.iso *.ISO *.gcm *.GCM *.rvz *.RVZ *.wia *.WIA *.gcz *.GCZ",
             "--file-filter=All files | *"
         });
         if (!selected.empty()) return selected;
     }
     else if (commandExists("kdialog")) {
         const std::string selected = runDialog("kdialog", {
-            "--getopenfilename", ".", "*.iso *.ISO *.gcm *.GCM|GameCube ISO/GCM"
+            "--getopenfilename", ".", "*.iso *.ISO *.gcm *.GCM *.rvz *.RVZ *.wia *.WIA *.gcz *.GCZ|GameCube disc image"
         });
         if (!selected.empty()) return selected;
     }
@@ -202,6 +203,62 @@ int askForLanguage(const std::vector<std::string>& names)
     }
 
     return -1;
+}
+
+fs::path findConverter()
+{
+    const auto beside = executablePath().parent_path() / "dolphin-tool";
+    if (fs::is_regular_file(beside) && access(beside.c_str(), X_OK) == 0) return beside;
+    const char* value = std::getenv("PATH");
+    if (!value) return {};
+    const std::string paths(value);
+    std::size_t start = 0;
+    while (start <= paths.size()) {
+        const auto end = paths.find(':', start);
+        const auto candidate = fs::path(paths.substr(start, end - start)) / "dolphin-tool";
+        if (fs::is_regular_file(candidate) && access(candidate.c_str(), X_OK) == 0)
+            return fs::absolute(candidate);
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return {};
+}
+
+fs::path askForConverter()
+{
+    if (commandExists("zenity"))
+        return runDialog("zenity", { "--file-selection", "--title=Choose dolphin-tool from your Dolphin installation" });
+    if (commandExists("kdialog"))
+        return runDialog("kdialog", { "--getopenfilename", ".", "dolphin-tool", "--title", "Choose dolphin-tool" });
+    return {};
+}
+
+bool convertImage(const fs::path& converter, const fs::path& source,
+                  const fs::path& destination, const std::function<void()>& pump, std::string& error)
+{
+    const pid_t child = fork();
+    if (child == 0) {
+        execl(converter.c_str(), converter.c_str(), "convert", "-i", source.c_str(),
+              "-o", destination.c_str(), "-f", "iso", static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    if (child < 0) { error = "Could not start dolphin-tool: " + std::string(std::strerror(errno)); return false; }
+    int status = 0;
+    for (;;) {
+        const pid_t result = waitpid(child, &status, WNOHANG);
+        if (result == child) break;
+        if (result < 0) {
+            if (errno == EINTR) continue;
+            error = "Could not wait for dolphin-tool: " + std::string(std::strerror(errno));
+            return false;
+        }
+        if (pump) pump();
+        usleep(50000);
+    }
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) return true;
+    error = "Disc conversion failed. Check that dolphin-tool runs, the temporary folder has free space, "
+            "and the disc image opens in Dolphin.";
+    return false;
 }
 
 // When the launcher is started by double-clicking it in a file manager there

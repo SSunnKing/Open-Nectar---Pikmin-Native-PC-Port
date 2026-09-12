@@ -14,6 +14,7 @@
 // caracteres no ASCII sobreviven en ambos sistemas.
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,15 @@ unsigned long currentProcessId();
 
 // Diálogo de selección de la imagen ISO/GCM. Ruta vacía si se cancela.
 std::filesystem::path askForImage();
+
+// Optional Dolphin converter, found beside the launcher or on PATH. The picker
+// lets graphical installs use an existing Dolphin download without commands.
+std::filesystem::path findConverter();
+std::filesystem::path askForConverter();
+bool convertImage(const std::filesystem::path& converter,
+                  const std::filesystem::path& source,
+                  const std::filesystem::path& destination,
+                  const std::function<void()>& pump, std::string& error);
 
 // Diálogo de selección de la carpeta de instalación. Vacía si se cancela.
 std::filesystem::path askForInstallDirectory();

@@ -450,12 +450,13 @@ else()
     set(LAUNCHER_PLATFORM_SOURCE pc_port/launcher/launcher_platform_posix.cpp)
 endif()
 
+find_package(Threads REQUIRED)
 add_executable(pikmin_launcher
     pc_port/launcher/launcher_main.cpp
     pc_port/launcher/installer_ui.cpp
     ${LAUNCHER_PLATFORM_SOURCE})
 target_include_directories(pikmin_launcher PRIVATE ${SDL2_INCLUDE_DIRS})
-target_link_libraries(pikmin_launcher PRIVATE pikmin_disc_image ${SDL2_LIBRARIES})
+target_link_libraries(pikmin_launcher PRIVATE pikmin_disc_image ${SDL2_LIBRARIES} Threads::Threads)
 if (WIN32)
     # Diálogo de archivo clásico, selector de carpeta del shell y COM.
     target_link_libraries(pikmin_launcher PRIVATE comdlg32 ole32 shell32 uuid)
@@ -488,6 +489,18 @@ enable_testing()
 add_test(NAME gamecube_image_test COMMAND gamecube_image_test)
 add_test(NAME sha256_test COMMAND sha256_test)
 add_test(NAME installer_ui_test COMMAND installer_ui_test)
+
+add_executable(asset_finalize_test pc_port/launcher/asset_finalize_test.cpp)
+target_link_libraries(asset_finalize_test PRIVATE Threads::Threads)
+target_compile_options(asset_finalize_test PRIVATE ${NATIVE_COMPILE_OPTIONS})
+add_test(NAME asset_finalize_test COMMAND asset_finalize_test)
+
+add_executable(prepared_image_test pc_port/launcher/prepared_image_test.cpp ${LAUNCHER_PLATFORM_SOURCE})
+target_compile_options(prepared_image_test PRIVATE ${NATIVE_COMPILE_OPTIONS})
+if (WIN32)
+    target_link_libraries(prepared_image_test PRIVATE comdlg32 ole32 shell32 uuid)
+endif()
+add_test(NAME prepared_image_test COMMAND prepared_image_test)
 
 add_executable(pc_generator_cache_validation_test
     pc_port/save/pc_generator_cache_validation_test.cpp)
