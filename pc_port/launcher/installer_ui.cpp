@@ -48,7 +48,7 @@ const Glyph& glyphFor(char input)
         { '5', { 31, 16, 16, 30, 1, 1, 30 } }, { '6', { 14, 16, 16, 30, 17, 17, 14 } },
         { '7', { 31, 1, 2, 4, 8, 8, 8 } }, { '8', { 14, 17, 17, 14, 17, 17, 14 } },
         { '9', { 14, 17, 17, 15, 1, 1, 14 } }, { '.', { 0, 0, 0, 0, 0, 12, 12 } },
-        { '/', { 1, 2, 2, 4, 8, 8, 16 } }, { ':', { 0, 12, 12, 0, 12, 12, 0 } },
+        { ',', { 0, 0, 0, 0, 4, 4, 8 } }, { '/', { 1, 2, 2, 4, 8, 8, 16 } }, { ':', { 0, 12, 12, 0, 12, 12, 0 } },
         { '-', { 0, 0, 0, 31, 0, 0, 0 } }, { '_', { 0, 0, 0, 0, 0, 0, 31 } },
         { '(', { 2, 4, 8, 8, 8, 4, 2 } }, { ')', { 8, 4, 2, 2, 2, 4, 8 } },
         { '%', { 17, 2, 4, 8, 17, 0, 0 } }, { '?', { 14, 17, 1, 2, 4, 0, 4 } }
@@ -163,11 +163,18 @@ struct InstallerWindow::Impl {
         drawButton(installButton, installing ? "Installing" : "Install",
                    contains(installButton, mouseX, mouseY), rom.empty() || installDirectory.empty() || installing);
 
+        drawText(renderer, 45, 279, "In game: F1 opens graphics, controls and gameplay settings", 1,
+                 { 180, 197, 214, 255 });
+
         if (installing) {
             SDL_Rect track { 45, 373, 670, 12 };
             fillRect(renderer, track, { 36, 50, 70, 255 });
             SDL_Rect bar = track;
             bar.w = static_cast<int>(track.w * std::min(progress, 100u) / 100u);
+            if (progress > 100) {
+                bar.w = 100;
+                bar.x += static_cast<int>((SDL_GetTicks() / 8) % (track.w - bar.w));
+            }
             fillRect(renderer, bar, { 116, 185, 92, 255 });
         }
         drawText(renderer, 45, 400, fitPath(status, 670, 1), 1, { 180, 197, 214, 255 });
@@ -257,6 +264,10 @@ bool InstallerWindow::choosePaths(const std::function<std::string()>& chooseRom,
                                   const std::function<std::string()>& chooseInstallDirectory,
                                   std::string& rom, std::string& installDirectory)
 {
+    mImpl->installing = false;
+    mImpl->progress = 0;
+    mImpl->status = "Choose your disc image and where to install";
+    mImpl->render();
     SDL_Event event;
     bool pendingRedraw = false;
     for (;;) {
@@ -302,11 +313,32 @@ bool InstallerWindow::choosePaths(const std::function<std::string()>& chooseRom,
     return false;
 }
 
-void InstallerWindow::updateProgress(std::uint32_t percent, const std::string& currentFile)
+void InstallerWindow::updateProgress(std::uint32_t percent, const std::string& currentFile,
+                                     const std::string& phase)
 {
+    mImpl->installing = true;
     mImpl->progress = percent;
-    mImpl->status = "Extrayendo (" + std::to_string(percent) + "%): " + currentFile;
+    mImpl->status = phase + (percent <= 100 ? " (" + std::to_string(percent) + "%)" : "...");
+    if (!currentFile.empty()) {
+        const int remaining = 670 - textWidth(mImpl->status + ": ", 1);
+        mImpl->status += ": " + fitPath(currentFile, remaining, 1);
+    }
     mImpl->pump();
+}
+
+bool InstallerWindow::offerRetry(const std::string& message)
+{
+    mImpl->installing = false;
+    mImpl->status = "Installation did not finish";
+    mImpl->render();
+    const SDL_MessageBoxButtonData buttons[] = {
+        { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Close" },
+        { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Back to setup" }
+    };
+    const SDL_MessageBoxData data { SDL_MESSAGEBOX_ERROR, mImpl->window, "Open Nectar Installer",
+                                   message.c_str(), 2, buttons, nullptr };
+    int selected = 0;
+    return SDL_ShowMessageBox(&data, &selected) == 0 && selected == 1;
 }
 
 void InstallerWindow::showError(const std::string& message)
@@ -323,6 +355,8 @@ void InstallerWindow::showComplete(const std::string& installDirectory, bool wil
     mImpl->status = "Installation complete";
     mImpl->render();
     std::string message = "Open Nectar is installed in:\n" + installDirectory;
+    message += "\n\nF1 opens graphics, controls and gameplay settings."
+               "\nRun nectar-launcher from this folder to play again.";
     if (willLaunch) message += "\n\nThe game will start now.";
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Installation complete", message.c_str(), mImpl->window);
 }

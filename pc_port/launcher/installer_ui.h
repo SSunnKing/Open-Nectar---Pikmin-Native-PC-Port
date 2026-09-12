@@ -19,8 +19,11 @@ public:
     bool choosePaths(const std::function<std::string()>& chooseRom,
                      const std::function<std::string()>& chooseInstallDirectory,
                      std::string& rom, std::string& installDirectory);
-    void updateProgress(std::uint32_t percent, const std::string& currentFile);
+    // Percent > 100 means an indeterminate phase (external disc conversion).
+    void updateProgress(std::uint32_t percent, const std::string& currentFile,
+                        const std::string& phase = "Extracting");
     void showError(const std::string& message);
+    bool offerRetry(const std::string& message);
     void showComplete(const std::string& installDirectory, bool willLaunch);
 
 private:

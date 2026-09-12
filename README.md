@@ -77,7 +77,7 @@ Everything else — glibc, SDL2, audio libraries — travels inside the package,
 1. Extract `nectar-windows.zip` anywhere. There is no installer to run and
    nothing is written outside the folder you choose.
 2. Run `nectar-launcher.exe`.
-3. It asks for your Pikmin ISO or GCM, and then for a folder to install into.
+3. It asks for your Pikmin disc image, and then for a folder to install into.
    Any folder works.
 4. It verifies the image, extracts the assets and starts the game.
 
@@ -85,6 +85,27 @@ Installation takes a minute or two, most of it verifying that the disc image is
 intact and that every extracted file came out right. That check catches damaged
 copies and failing drives, which are the usual reason a game installs fine and
 then misbehaves later.
+
+ISO/GCM works without additional tools. For RVZ/WIA/GCZ, the launcher uses
+**DolphinTool.exe** on Windows or **dolphin-tool** on Linux from an existing
+[Dolphin installation](https://dolphin-emu.org/download/). It looks beside the
+launcher and on PATH, then offers a file picker if the tool was not found.
+Keep the tool with the rest of its Dolphin installation. It is not downloaded
+or included by Open Nectar.
+
+Conversion needs about **1.4 GiB extra free space in your system's temporary
+folder**. The source image is unchanged; a separate temporary ISO is verified,
+extracted, and removed when the attempt finishes. An interrupted conversion is
+never reused. Forced termination may leave a `nectar-disc-*` temporary folder;
+remove it only after the launcher and converter have stopped.
+
+The progress display identifies conversion, disc verification, extraction and
+finishing separately. If setup fails, **Back to setup** keeps your selections
+so you can correct the image, converter or destination. Temporary file locks
+at the final extraction step are retried for up to 2.5 seconds; persistent
+failures show the preserved extraction path instead of silently starting over.
+
+Once the game starts, **F1** opens graphics, controls and gameplay settings.
 
 **Playing afterwards**
 
@@ -104,6 +125,9 @@ nectar-launcher.exe --rom C:\path\to\Pikmin.iso --install-dir C:\Games\OpenNecta
 
 Add `--extract-only` to install without launching the game afterwards. This
 works over Remote Desktop and on machines with no desktop session.
+For a compressed image, add `--dolphin-tool C:\path\to\DolphinTool.exe` if
+the converter is not beside the launcher or on PATH. The same option accepts
+the path to `dolphin-tool` on Linux.
 
 **The console window is intentional**
 
@@ -133,11 +157,12 @@ To move the installation elsewhere, copy the folder. To remove it, delete it.
 | Closes instantly, no window | `SDL2.dll` is missing from the folder, or Windows blocked it |
 | "Could not initialize window/OpenGL" | Graphics drivers too old, or the generic Windows display driver |
 | Starts but finds no data | Run it from the installation folder, not from elsewhere |
-| The image is rejected | It must be Pikmin USA Rev 1 or Pikmin Europe, uncompressed. Convert RVZ/WIA/GCZ to ISO with `dolphin-tool` |
+| The image is rejected | It must be Pikmin USA Rev 1 or Pikmin Europe. RVZ/WIA/GCZ also needs the Dolphin converter; ISO/GCM does not |
+| Disc conversion fails | Check the temporary folder's free space and select the converter from a complete Dolphin installation, or use ISO/GCM |
 
 ### Both platforms
 
-The launcher asks for your ISO/GCM, extracts the assets it needs and starts the
+The launcher asks for your disc image, extracts the assets it needs and starts the
 game. Your disc image is never copied or modified.
 
 Supported discs:
