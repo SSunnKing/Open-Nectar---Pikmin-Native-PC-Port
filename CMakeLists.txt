@@ -155,6 +155,7 @@ if (NOT WIN32)
 endif()
 
 set(PC_PORT_SOURCES
+    pc_port/pc_input_script.cpp
     pc_port/pc_main.cpp
     pc_port/pc_window.cpp
     pc_port/pc_pad_axis.cpp
